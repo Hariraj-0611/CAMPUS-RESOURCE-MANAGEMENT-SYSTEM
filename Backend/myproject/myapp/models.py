@@ -1,8 +1,9 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 
+
 class User(AbstractUser):
-    """Custom User model with role-based access"""
+    """Custom User model with RBAC"""
     ROLE_CHOICES = [
         ('ADMIN', 'Admin'),
         ('STAFF', 'Staff'),
@@ -14,34 +15,39 @@ class User(AbstractUser):
         ('INACTIVE', 'Inactive'),
     ]
     
+    # Override email to make it unique and required
+    email = models.EmailField(unique=True)
+    
+    # Additional fields
     phone = models.CharField(max_length=20, blank=True, null=True)
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='STUDENT')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='ACTIVE')
+    # createdAt is handled by date_joined from AbstractUser
     
     class Meta:
         db_table = 'users'
+    
+    def __str__(self):
+        return f"{self.email} ({self.role})"
 
 
 class Resource(models.Model):
-    """Campus resources like labs, classrooms, etc."""
+    """Resource Management Model"""
     TYPE_CHOICES = [
-        ('Lab', 'Lab'),
-        ('Classroom', 'Classroom'),
-        ('Event Hall', 'Event Hall'),
-        ('Computer', 'Computer'),
+        ('LAB', 'Lab'),
+        ('CLASSROOM', 'Classroom'),
+        ('EVENT_HALL', 'Event Hall'),
     ]
     
     STATUS_CHOICES = [
         ('AVAILABLE', 'Available'),
-        ('MAINTENANCE', 'Maintenance'),
-        ('BLOCKED', 'Blocked'),
+        ('UNAVAILABLE', 'Unavailable'),
     ]
     
     name = models.CharField(max_length=100)
     type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     capacity = models.IntegerField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='AVAILABLE')
-    created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
         db_table = 'resources'
@@ -51,40 +57,38 @@ class Resource(models.Model):
 
 
 class Booking(models.Model):
-    """Booking reservations for resources"""
+    """Booking Model with double-booking prevention"""
     STATUS_CHOICES = [
         ('PENDING', 'Pending'),
         ('APPROVED', 'Approved'),
         ('REJECTED', 'Rejected'),
-        ('CANCELLED', 'Cancelled'),
     ]
     
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='bookings')
     resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='bookings')
-    booking_date = models.DateField()
-    time_slot = models.CharField(max_length=20)  # Format: "HH:MM-HH:MM"
-    participants_count = models.IntegerField()
+    booking_date = models.DateField(db_column='bookingDate')
+    time_slot = models.CharField(max_length=20, db_column='timeSlot')  # Keep for backward compatibility
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
+    number_of_attendees = models.IntegerField(default=1)
+    reason = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
-    created_at = models.DateTimeField(auto_now_add=True)
+    remarks = models.TextField(blank=True, null=True)
+    approved_by = models.ForeignKey(
+        User, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='approved_bookings'
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     
     class Meta:
         db_table = 'bookings'
-        unique_together = ['resource', 'booking_date', 'time_slot']
+        # Business Rule: Prevent double booking
+        unique_together = [['resource', 'booking_date', 'time_slot']]
     
     def __str__(self):
-        return f"{self.user.username} - {self.resource.name} on {self.booking_date}"
-
-
-class AuditLog(models.Model):
-    """Audit trail for administrative actions"""
-    action = models.CharField(max_length=50)
-    entity_type = models.CharField(max_length=50)
-    entity_id = models.IntegerField()
-    performed_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='audit_logs')
-    timestamp = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        db_table = 'audit_logs'
-    
-    def __str__(self):
-        return f"{self.action} on {self.entity_type} by {self.performed_by.username}"
+        return f"{self.user.email} - {self.resource.name} on {self.booking_date}"

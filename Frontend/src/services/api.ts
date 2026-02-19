@@ -1,108 +1,299 @@
+import { User } from '../types';
+
 const API_BASE_URL = 'http://localhost:8000/api';
 
-// Get auth token from localStorage
-const getAuthToken = () => localStorage.getItem('access_token');
-
-// API request helper
-async function apiRequest(endpoint: string, options: RequestInit = {}) {
-  const token = getAuthToken();
-  
-  const headers: HeadersInit = {
+// Helper function to get auth headers
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('access_token');
+  return {
     'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
-    ...options.headers,
+    ...(token && { 'Authorization': `Bearer ${token}` })
   };
+};
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers,
-  });
-
+// Helper function to handle API responses
+async function handleResponse(response: Response) {
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Request failed' }));
-    throw new Error(error.message || `HTTP ${response.status}`);
+    let errorMessage = `HTTP error! status: ${response.status}`;
+    try {
+      const error = await response.json();
+      // Handle different error formats
+      if (error.detail) {
+        errorMessage = error.detail;
+      } else if (error.message) {
+        errorMessage = error.message;
+      } else if (error.error) {
+        errorMessage = error.error;
+      } else if (typeof error === 'object') {
+        // Handle validation errors
+        const firstKey = Object.keys(error)[0];
+        if (firstKey && Array.isArray(error[firstKey])) {
+          errorMessage = `${firstKey}: ${error[firstKey][0]}`;
+        } else if (firstKey) {
+          errorMessage = `${firstKey}: ${error[firstKey]}`;
+        } else {
+          errorMessage = JSON.stringify(error);
+        }
+      }
+    } catch (e) {
+      // If JSON parsing fails, use status text
+      errorMessage = response.statusText || errorMessage;
+    }
+    throw new Error(errorMessage);
   }
-
   return response.json();
 }
 
-// Authentication
+// Auth API
 export const authAPI = {
-  login: async (username: string, password: string) => {
-    const data = await apiRequest('/auth/login/', {
+  async login(email: string, password: string) {
+    const response = await fetch(`${API_BASE_URL}/login/`, {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
     });
+    const data = await handleResponse(response);
     
-    // Store tokens
+    // Store tokens and user data
     localStorage.setItem('access_token', data.access);
     localStorage.setItem('refresh_token', data.refresh);
+    localStorage.setItem('user_data', JSON.stringify(data.user));
     
     return data;
   },
-  
-  logout: () => {
+
+  async register(userData: { name: string; email: string; password: string; role: string }) {
+    const response = await fetch(`${API_BASE_URL}/register/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: userData.name,
+        email: userData.email,
+        password: userData.password,
+        password2: userData.password, // Backend expects password2 for confirmation
+        role: userData.role
+      })
+    });
+    return handleResponse(response);
+  },
+
+  logout() {
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
+    localStorage.removeItem('user_data');
   },
+
+  getCurrentUser(): User | null {
+    const userData = localStorage.getItem('user_data');
+    return userData ? JSON.parse(userData) : null;
+  }
 };
 
-// Users
-export const usersAPI = {
-  getAll: () => apiRequest('/users/'),
-  
-  create: (userData: any) => apiRequest('/users/', {
-    method: 'POST',
-    body: JSON.stringify(userData),
-  }),
-  
-  update: (id: number, userData: any) => apiRequest(`/users/${id}/`, {
-    method: 'PUT',
-    body: JSON.stringify(userData),
-  }),
-  
-  deactivate: (id: number) => apiRequest(`/users/${id}/deactivate/`, {
-    method: 'PATCH',
-  }),
-};
-
-// Resources
+// Resources API
 export const resourcesAPI = {
-  getAll: () => apiRequest('/resources/'),
-  
-  getById: (id: number) => apiRequest(`/resources/${id}/`),
-  
-  create: (resourceData: any) => apiRequest('/resources/', {
-    method: 'POST',
-    body: JSON.stringify(resourceData),
-  }),
-  
-  update: (id: number, resourceData: any) => apiRequest(`/resources/${id}/`, {
-    method: 'PUT',
-    body: JSON.stringify(resourceData),
-  }),
+  async getAll() {
+    const response = await fetch(`${API_BASE_URL}/resources/`, {
+      headers: getAuthHeaders()
+    });
+    return handleResponse(response);
+  },
+
+  async getById(id: number) {
+    const response = await fetch(`${API_BASE_URL}/resources/${id}/`, {
+      headers: getAuthHeaders()
+    });
+    return handleResponse(response);
+  },
+
+  async create(resourceData: any) {
+    const response = await fetch(`${API_BASE_URL}/resources/`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(resourceData)
+    });
+    return handleResponse(response);
+  },
+
+  async update(id: number, resourceData: any) {
+    const response = await fetch(`${API_BASE_URL}/resources/${id}/`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(resourceData)
+    });
+    return handleResponse(response);
+  },
+
+  async delete(id: number) {
+    const response = await fetch(`${API_BASE_URL}/resources/${id}/`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
+    if (!response.ok) {
+      let errorMessage = 'Failed to delete resource';
+      try {
+        const error = await response.json();
+        if (error.detail) {
+          errorMessage = error.detail;
+        } else if (error.error) {
+          errorMessage = error.error;
+        } else if (typeof error === 'string') {
+          errorMessage = error;
+        }
+      } catch (e) {
+        // If JSON parsing fails, use default message
+      }
+      throw new Error(errorMessage);
+    }
+  },
+
+  async updateAvailability(id: number, status: string) {
+    const response = await fetch(`${API_BASE_URL}/resources/${id}/update-availability/`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ status })
+    });
+    return handleResponse(response);
+  },
+
+  async checkAvailability(id: number, date: string, timeSlot: string) {
+    const response = await fetch(
+      `${API_BASE_URL}/resources/${id}/availability/?date=${date}&time_slot=${timeSlot}`,
+      { headers: getAuthHeaders() }
+    );
+    return handleResponse(response);
+  }
 };
 
-// Bookings
+// Bookings API
 export const bookingsAPI = {
-  getAll: () => apiRequest('/bookings/'),
-  
-  getMy: () => apiRequest('/bookings/my_bookings/'),
-  
-  create: (bookingData: any) => apiRequest('/bookings/', {
-    method: 'POST',
-    body: JSON.stringify(bookingData),
-  }),
-  
-  approve: (id: number) => apiRequest(`/bookings/${id}/approve/`, {
-    method: 'PATCH',
-  }),
-  
-  reject: (id: number) => apiRequest(`/bookings/${id}/reject/`, {
-    method: 'PATCH',
-  }),
-  
-  cancel: (id: number) => apiRequest(`/bookings/${id}/cancel/`, {
-    method: 'PATCH',
-  }),
+  async getAll() {
+    const response = await fetch(`${API_BASE_URL}/bookings/`, {
+      headers: getAuthHeaders()
+    });
+    return handleResponse(response);
+  },
+
+  async getMyBookings() {
+    const response = await fetch(`${API_BASE_URL}/bookings/my/`, {
+      headers: getAuthHeaders()
+    });
+    return handleResponse(response);
+  },
+
+  async getById(id: number) {
+    const response = await fetch(`${API_BASE_URL}/bookings/${id}/`, {
+      headers: getAuthHeaders()
+    });
+    return handleResponse(response);
+  },
+
+  async create(bookingData: any) {
+    const response = await fetch(`${API_BASE_URL}/bookings/`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(bookingData)
+    });
+    return handleResponse(response);
+  },
+
+  async approve(id: number) {
+    const response = await fetch(`${API_BASE_URL}/bookings/${id}/approve/`, {
+      method: 'PUT',
+      headers: getAuthHeaders()
+    });
+    return handleResponse(response);
+  },
+
+  async reject(id: number, remarks: string) {
+    const response = await fetch(`${API_BASE_URL}/bookings/${id}/reject/`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ remarks })
+    });
+    return handleResponse(response);
+  },
+
+  async cancel(id: number) {
+    const response = await fetch(`${API_BASE_URL}/bookings/${id}/cancel/`, {
+      method: 'PUT',
+      headers: getAuthHeaders()
+    });
+    return handleResponse(response);
+  },
+
+  async update(id: number, bookingData: any) {
+    const response = await fetch(`${API_BASE_URL}/bookings/${id}/`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(bookingData)
+    });
+    return handleResponse(response);
+  }
+};
+
+// Users API
+export const usersAPI = {
+  async getAll() {
+    const response = await fetch(`${API_BASE_URL}/users/`, {
+      headers: getAuthHeaders()
+    });
+    return handleResponse(response);
+  },
+
+  async getById(id: number) {
+    const response = await fetch(`${API_BASE_URL}/users/${id}/`, {
+      headers: getAuthHeaders()
+    });
+    return handleResponse(response);
+  },
+
+  async create(userData: any) {
+    const response = await fetch(`${API_BASE_URL}/users/`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(userData)
+    });
+    return handleResponse(response);
+  },
+
+  async update(id: number, userData: any) {
+    const response = await fetch(`${API_BASE_URL}/users/${id}/`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(userData)
+    });
+    return handleResponse(response);
+  },
+
+  async delete(id: number) {
+    const response = await fetch(`${API_BASE_URL}/users/${id}/`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
+    if (!response.ok) {
+      let errorMessage = 'Failed to delete user';
+      try {
+        const error = await response.json();
+        if (error.detail) {
+          errorMessage = error.detail;
+        } else if (error.error) {
+          errorMessage = error.error;
+        } else if (typeof error === 'string') {
+          errorMessage = error;
+        }
+      } catch (e) {
+        // If JSON parsing fails, use default message
+      }
+      throw new Error(errorMessage);
+    }
+  },
+
+  async updateStatus(id: number, status: string) {
+    const response = await fetch(`${API_BASE_URL}/users/${id}/update-status/`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ status })
+    });
+    return handleResponse(response);
+  }
 };

@@ -1,11 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Calendar, Clock, Users } from 'lucide-react';
-import { Button } from '../../components/ui/Button';
-import { Input } from '../../components/ui/Input';
-import { useToast } from '../../components/Toast';
-import { resourcesAPI, bookingsAPI } from '../../services/api';
+import { resourcesAPI, bookingsAPI, authAPI } from '../../services/api';
 import { Modal } from '../../components/Modal';
-import { User } from '../../types';
 
 interface Resource {
   id: number;
@@ -15,28 +11,16 @@ interface Resource {
   status: string;
 }
 
-interface CreateBookingProps {
-  user: User;
-  preSelectedResourceId?: string | null;
-  onSuccess: () => void;
-  onCancel: () => void;
-}
-
-export function CreateBooking({
-  user,
-  preSelectedResourceId,
-  onSuccess,
-  onCancel
-}: CreateBookingProps) {
-  const { showToast } = useToast();
+const StaffCreateBooking: React.FC = () => {
   const [resources, setResources] = useState<Resource[]>([]);
   const [loading, setLoading] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestedResources, setSuggestedResources] = useState<Resource[]>([]);
   const [capacityError, setCapacityError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   
   const [formData, setFormData] = useState({
-    resourceId: preSelectedResourceId || '',
+    resourceId: '',
     date: '',
     startTime: '',
     endTime: '',
@@ -51,9 +35,16 @@ export function CreateBooking({
   const fetchResources = async () => {
     try {
       const data = await resourcesAPI.getAll();
-      setResources(data.results || data);
+      console.log('Fetched resources:', data);
+      const resourceList = data.results || data;
+      setResources(resourceList);
+      
+      if (resourceList.length === 0) {
+        alert('No resources found. Please contact admin to add resources.');
+      }
     } catch (error: any) {
-      showToast(error.message || 'Failed to load resources', 'error');
+      console.error('Failed to load resources:', error);
+      alert('Failed to load resources: ' + error.message);
     }
   };
 
@@ -65,67 +56,71 @@ export function CreateBooking({
     e.preventDefault();
     
     if (!formData.resourceId) {
-      showToast('Please select a resource', 'error');
+      alert('Please select a resource');
       return;
     }
 
     if (!formData.reason.trim()) {
-      showToast('Please provide a reason for booking', 'error');
+      alert('Please provide a reason for booking');
       return;
     }
 
     // Validate start time is before end time
     if (formData.startTime && formData.endTime) {
       if (formData.startTime >= formData.endTime) {
-        showToast('End time must be after start time', 'error');
+        alert('End time must be after start time');
         return;
       }
     }
 
     setLoading(true);
+    setSuccessMessage('');
 
     try {
       // Generate time_slot from start and end time
-      const timeSlot = `${formData.startTime}-${formData.endTime}`;
+      const timeSlot = formData.startTime && formData.endTime 
+        ? `${formData.startTime}-${formData.endTime}`
+        : '09:00-17:00'; // Default time slot
 
       const bookingData = {
         resource: parseInt(formData.resourceId),
         booking_date: formData.date,
         time_slot: timeSlot,
-        start_time: formData.startTime,
-        end_time: formData.endTime,
+        start_time: formData.startTime || undefined,
+        end_time: formData.endTime || undefined,
         number_of_attendees: parseInt(formData.participants) || 0,
         reason: formData.reason
       };
 
       await bookingsAPI.create(bookingData);
       
-      showToast(
-        'Booking request submitted successfully! Waiting for admin approval.',
-        'success'
-      );
-      onSuccess();
-    } catch (error: any) {
-      console.error('Booking error:', error);
+      setSuccessMessage('Booking request submitted successfully! Waiting for admin approval. ✅');
       
+      // Reset form
+      setFormData({
+        resourceId: '',
+        date: '',
+        startTime: '',
+        endTime: '',
+        participants: '',
+        reason: ''
+      });
+
+      // Auto-hide success message after 5 seconds
+      setTimeout(() => setSuccessMessage(''), 5000);
+    } catch (error: any) {
       // Check if it's a capacity error with suggestions
       try {
-        // Try to parse if it's a JSON string
-        let errorData = error.message;
-        if (typeof errorData === 'string' && errorData.includes('{')) {
-          errorData = JSON.parse(errorData);
-        }
-        
+        const errorData = JSON.parse(error.message);
         if (errorData.capacity_exceeded || errorData.suggested_resources) {
           setCapacityError(errorData.message || 'Capacity exceeded');
           setSuggestedResources(errorData.suggested_resources || []);
           setShowSuggestions(true);
         } else {
-          showToast(error.message || 'Failed to create booking', 'error');
+          alert(error.message || 'Failed to create booking');
         }
-      } catch (parseError) {
-        // If parsing fails, just show the error message
-        showToast(error.message || 'Failed to create booking', 'error');
+      } catch {
+        alert(error.message || 'Failed to create booking');
       }
     } finally {
       setLoading(false);
@@ -140,31 +135,28 @@ export function CreateBooking({
   };
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200 bg-[#f8fafc]">
-          <h2 className="text-xl font-bold text-[#1e3a5f]">
-            Create New Booking
-          </h2>
-          <p className="text-sm text-gray-500">
-            Fill in the details to reserve a resource.
-          </p>
-        </div>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Book Resource</h1>
+        <p className="text-gray-600 mt-1">Create a new booking (requires admin approval)</p>
+      </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
+      {successMessage && (
+        <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded">
+          {successMessage}
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
               Select Resource *
             </label>
             <select
-              className="block w-full rounded-md border-gray-300 shadow-sm focus:border-[#1e3a5f] focus:ring-[#1e3a5f] sm:text-sm py-2.5"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               value={formData.resourceId}
-              onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  resourceId: e.target.value
-                })
-              }
+              onChange={(e) => setFormData({ ...formData, resourceId: e.target.value })}
               required
             >
               <option value="">-- Choose a resource --</option>
@@ -177,36 +169,31 @@ export function CreateBooking({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Input
-              label="Date *"
-              type="date"
-              min={new Date().toISOString().split('T')[0]}
-              value={formData.date}
-              onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  date: e.target.value
-                })
-              }
-              required
-            />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Date *
+              </label>
+              <input
+                type="date"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                min={new Date().toISOString().split('T')[0]}
+                value={formData.date}
+                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                required
+              />
+            </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
                 Number of Attendees *
               </label>
               <input
                 type="number"
-                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-[#1e3a5f] focus:ring-[#1e3a5f] sm:text-sm py-2.5 px-3"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 min="1"
                 max={selectedResource?.capacity || 100}
                 value={formData.participants}
-                onChange={(e) =>
-                  setFormData({
-                    ...formData,
-                    participants: e.target.value
-                  })
-                }
+                onChange={(e) => setFormData({ ...formData, participants: e.target.value })}
                 placeholder="Enter number of attendees"
                 required
               />
@@ -219,48 +206,43 @@ export function CreateBooking({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Input
-              label="Start Time *"
-              type="time"
-              value={formData.startTime}
-              onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  startTime: e.target.value
-                })
-              }
-              required
-            />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Start Time *
+              </label>
+              <input
+                type="time"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                value={formData.startTime}
+                onChange={(e) => setFormData({ ...formData, startTime: e.target.value })}
+                required
+              />
+            </div>
 
-            <Input
-              label="End Time *"
-              type="time"
-              value={formData.endTime}
-              onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  endTime: e.target.value
-                })
-              }
-              required
-            />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                End Time *
+              </label>
+              <input
+                type="time"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                value={formData.endTime}
+                onChange={(e) => setFormData({ ...formData, endTime: e.target.value })}
+                required
+              />
+            </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
               Reason for Booking *
             </label>
             <textarea
-              className="block w-full rounded-md border-gray-300 shadow-sm focus:border-[#1e3a5f] focus:ring-[#1e3a5f] sm:text-sm"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               rows={4}
               placeholder="Please provide a reason for this booking..."
               value={formData.reason}
-              onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  reason: e.target.value
-                })
-              }
+              onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
               required
             />
           </div>
@@ -271,27 +253,28 @@ export function CreateBooking({
             </h4>
             <ul className="text-sm text-blue-700 space-y-1">
               <li className="flex items-center">
-                <Calendar className="h-4 w-4 mr-2" /> Date:{' '}
-                {formData.date || 'Not selected'}
+                <Calendar className="h-4 w-4 mr-2" /> Date: {formData.date || 'Not selected'}
               </li>
               <li className="flex items-center">
-                <Clock className="h-4 w-4 mr-2" /> Time:{' '}
-                {formData.startTime && formData.endTime ? `${formData.startTime} - ${formData.endTime}` : 'Not selected'}
+                <Clock className="h-4 w-4 mr-2" /> Time: {formData.startTime && formData.endTime ? `${formData.startTime} - ${formData.endTime}` : 'Not selected'}
               </li>
               <li className="flex items-center">
-                <Users className="h-4 w-4 mr-2" /> Attendees:{' '}
-                {formData.participants || 'Not entered'}
+                <Users className="h-4 w-4 mr-2" /> Attendees: {formData.participants || 'Not entered'}
               </li>
             </ul>
+            <p className="text-xs text-blue-600 mt-2">
+              ⏳ Staff bookings require admin approval
+            </p>
           </div>
 
-          <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-            <Button type="button" variant="outline" onClick={onCancel} disabled={loading}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? 'Creating...' : 'Confirm Booking'}
-            </Button>
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? 'Creating...' : 'Create Booking'}
+            </button>
           </div>
         </form>
       </div>
@@ -335,13 +318,18 @@ export function CreateBooking({
             )}
 
             <div className="flex justify-end">
-              <Button onClick={() => setShowSuggestions(false)}>
+              <button
+                onClick={() => setShowSuggestions(false)}
+                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+              >
                 Close
-              </Button>
+              </button>
             </div>
           </div>
         </Modal>
       )}
     </div>
   );
-}
+};
+
+export default StaffCreateBooking;
